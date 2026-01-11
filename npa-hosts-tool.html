@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>警政署反詐騙 Hosts 轉換工具</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #3498db;
+            --bg-color: #f4f7f6;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            color: #333;
+        }
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 600px;
+        }
+        h2 {
+            margin-top: 0;
+            color: var(--primary-color);
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .input-group {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box; /* 確保 padding 不會撐大寬度 */
+        }
+        input[type="text"]:focus {
+            border-color: var(--accent-color);
+            outline: none;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 6px;
+            display: none;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .loading {
+            background-color: #e2e3e5;
+            color: #383d41;
+            text-align: center;
+        }
+        .note {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🛡️ 警政署 Hosts 產生器</h2>
+    
+    <div class="input-group">
+        <label for="csvUrl">CSV 資料集網址：</label>
+        <input type="text" id="csvUrl" value="https://opdadm.moi.gov.tw/api/v1/no-auth/resource/api/dataset/29E8E643-88ED-4952-B21E-BD42A3B7108C/resource/3DF01659-5AD7-45E0-85CB-C09B0AD97093/download" placeholder="請輸入 CSV 下載網址">
+        <div class="note">預設為內政部開放資料平台之「網路已下架之詐騙網頁」CSV 連結。</div>
+    </div>
+
+    <button id="btnConvert" onclick="startProcess()">🚀 開始轉換並下載</button>
+
+    <div id="status"></div>
+</div>
+
+<script>
+    async function startProcess() {
+        const urlInput = document.getElementById('csvUrl');
+        const btn = document.getElementById('btnConvert');
+        const statusDiv = document.getElementById('status');
+        const url = urlInput.value.trim();
+
+        if (!url) {
+            showStatus('請輸入有效的網址', 'error');
+            return;
+        }
+
+        // UI 狀態更新
+        btn.disabled = true;
+        btn.innerText = "⏳ 下載與處理中...";
+        showStatus('正在連線至政府開放資料平台...', 'loading');
+
+        try {
+            // 嘗試抓取資料
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                throw new Error(`連線失敗 (HTTP ${response.status})`);
+            }
+
+            // 取得 CSV 文字內容
+            // 注意：這裡假設回傳的是 utf-8 編碼
+            const csvText = await response.text();
+            
+            // 開始處理資料
+            const hostsContent = processCSV(csvText);
+
+            // 觸發下載
+            downloadFile(hostsContent, 'hosts.txt');
+
+            showStatus(`✅ 成功！已處理 ${hostsContent.split('\n').length} 筆資料並開始下載。`, 'success');
+
+        } catch (error) {
+            console.error(error);
+            let errorMsg = `❌ 發生錯誤：${error.message}`;
+            
+            // 針對 CORS 常見錯誤給予提示
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                errorMsg += '<br><br>⚠️ <b>CORS 安全性警告：</b><br>瀏覽器可能阻擋了跨網域請求。這是政府伺服器的設定限制。<br>建議解決方案：<br>1. 安裝 Chrome 擴充功能 "Allow CORS".<br>2. 或請使用剛剛提供的 Python/Colab 版本。';
+            }
+            showStatus(errorMsg, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "🚀 開始轉換並下載";
+        }
+    }
+
+    function processCSV(text) {
+        const lines = text.split(/\r\n|\n/);
+        const domains = new Set();
+
+        // 跳過標題列
+        // 觀察檔案：前兩行通常是標題 (英文/中文)，從第3行開始是資料
+        // 但為了保險起見，我們檢查每一行
+        
+        lines.forEach((line, index) => {
+            // 簡單過濾空行
+            if (!line.trim()) return;
+
+            // 簡單過濾標題行 (如果包含 WEBURL 或 網址 關鍵字就跳過)
+            if (line.includes('WEBURL') || line.includes('網址')) return;
+
+            const cols = line.split(',');
+            // CSV 格式：WEBSITE_NM, WEBURL, ...
+            // WEBURL 通常在第 2 欄 (index 1)
+            if (cols.length >= 2) {
+                let rawUrl = cols[1]; 
+                
+                // 清理網址邏輯 (與 Python 版一致)
+                let clean = cleanDomain(rawUrl);
+                if (clean) {
+                    domains.add(clean);
+                }
+            }
+        });
+
+        // 排序
+        const sortedDomains = Array.from(domains).sort();
+
+        // 產生 Hosts 格式
+        return sortedDomains.map(d => `0.0.0.0 ${d}`).join('\n');
+    }
+
+    function cleanDomain(url) {
+        if (!url) return null;
+        url = url.trim();
+        
+        // 移除 http:// 或 https://
+        url = url.replace(/^(https?:\/\/)/i, '');
+        
+        // 移除路徑 (取第一個 / 之前的部分)
+        if (url.includes('/')) {
+            url = url.split('/')[0];
+        }
+        
+        // 簡單驗證是否像個網域 (包含點，且長度大於3)
+        if (url.includes('.') && url.length > 3) {
+            return url;
+        }
+        return null;
+    }
+
+    function downloadFile(content, fileName) {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }, 0);
+    }
+
+    function showStatus(msg, type) {
+        const el = document.getElementById('status');
+        el.style.display = 'block';
+        el.className = type;
+        el.innerHTML = msg;
+    }
+</script>
+
+</body>
+</html>
